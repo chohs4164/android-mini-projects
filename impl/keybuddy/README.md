@@ -44,6 +44,20 @@ Supabase publishable key(`sb_publishable_...`)는 JWT가 아니므로 `Authoriza
 아니라 `apikey` 헤더로 보냅니다. `recommend` 함수는 공개 추천 엔드포인트라
 `supabase/config.toml`에서 `verify_jwt = false`로 설정합니다.
 
+## 실행 방식 선택
+
+keybuddy는 프론트엔드만으로는 추천 기능이 완전히 동작하지 않습니다. 추천 버튼을
+누르면 Supabase Edge Function이 OpenAI API를 대신 호출하기 때문입니다.
+
+다른 개발자가 실행할 때는 아래 둘 중 하나를 선택합니다.
+
+| 방식 | 필요한 값 | OpenAI API 키 필요 여부 | 사용 상황 |
+| --- | --- | --- | --- |
+| 기존 Supabase 추천 API 사용 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | 로컬에는 필요 없음 | 팀원이 이미 배포한 추천 API를 같이 사용할 때 |
+| 내 Supabase에 직접 배포 | Supabase 프로젝트, `OPENAI_API_KEY` secret | Supabase secret으로 필요 | 각자 독립 환경을 만들 때 |
+
+`OPENAI_API_KEY`는 절대로 프론트엔드 `.env.local`에 넣지 않습니다.
+
 ## 로컬 준비
 
 ### 1. 프론트 설정
@@ -55,12 +69,18 @@ npm install
 npm run dev
 ```
 
-`.env.local`에는 Supabase 프로젝트의 공개 설정값을 채웁니다.
+`.env.local`에는 Supabase 프로젝트의 공개 설정값을 채웁니다. 이 두 값은 브라우저에
+노출 가능한 값입니다. 단, `.env.local` 파일 자체는 개인 로컬 설정 파일이므로
+커밋하지 않습니다.
 
 ```env
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
+
+현재 팀 Supabase 프로젝트를 같이 쓰는 경우에는 팀원이 공유한 publishable key를
+`VITE_SUPABASE_ANON_KEY`에 넣습니다. Supabase의 새 키 형식에서는
+`sb_publishable_...` 형태일 수 있습니다.
 
 로컬 Edge Function을 직접 붙일 때만 아래 값을 추가합니다.
 
@@ -68,7 +88,36 @@ VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 VITE_SUPABASE_RECOMMEND_URL=http://127.0.0.1:54321/functions/v1/recommend
 ```
 
-### 2. Supabase CLI 설정
+이 값이 없으면 프론트는 아래 주소로 배포된 함수를 호출합니다.
+
+```text
+${VITE_SUPABASE_URL}/functions/v1/recommend
+```
+
+### 2. 기존 Supabase 추천 API를 사용하는 경우
+
+이미 팀 Supabase에 `recommend` 함수가 배포되어 있다면 여기까지만 하면 됩니다.
+
+```bash
+cd impl/keybuddy/frontend
+npm run dev
+```
+
+브라우저에서 Vite가 출력한 주소로 접속합니다.
+
+```text
+http://localhost:5173/
+```
+
+이 방식에서는 로컬 컴퓨터에 OpenAI API 키가 없어도 됩니다. OpenAI 키는 Supabase
+Edge Function secret에만 저장되어 있습니다.
+
+### 3. 내 Supabase에 직접 배포하는 경우
+
+아래 과정은 Supabase 프로젝트를 새로 만들거나, 본인 Supabase 프로젝트로 추천 API를
+직접 배포할 때만 필요합니다.
+
+#### Supabase CLI 설정
 
 ```bash
 npm install -g supabase
@@ -89,14 +138,28 @@ https://abcdefghijk.supabase.co
         ^^^^^^^^^^^
 ```
 
-### 3. OpenAI secret 등록
+#### OpenAI secret 등록
 
-OpenAI API 키는 프론트 `.env.local`에 쓰지 않습니다.
+OpenAI API 키는 프론트 `.env.local`에 쓰지 않고, Supabase secret으로만 등록합니다.
 
 ```bash
 cd impl/keybuddy
 supabase secrets set OPENAI_API_KEY=sk-...
 supabase secrets set OPENAI_MODEL=gpt-5.4
+```
+
+#### Edge Function 배포
+
+```bash
+cd impl/keybuddy
+supabase functions deploy recommend --project-ref your-project-ref --use-api
+```
+
+배포 후 프론트의 `.env.local`을 본인 Supabase 프로젝트 값으로 맞춥니다.
+
+```env
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-publishable-key
 ```
 
 ## 로컬 실행
@@ -122,7 +185,12 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.4
 ```
 
-이 파일은 `supabase/.gitignore`로 제외됩니다.
+이 파일은 `supabase/.gitignore`로 제외됩니다. 로컬 Edge Function을 쓰는 경우에만
+프론트 `.env.local`에 아래 값을 추가합니다.
+
+```env
+VITE_SUPABASE_RECOMMEND_URL=http://127.0.0.1:54321/functions/v1/recommend
+```
 
 ## 배포
 
@@ -155,6 +223,68 @@ supabase functions deploy recommend --project-ref kzgrduvwwoflybrqayyk --use-api
 
 프론트 정적 배포는 Supabase Hosting이 아니라 Vercel, Netlify, GitHub Pages 같은 정적
 호스팅을 사용하면 됩니다. Supabase는 추천 API 역할만 담당합니다.
+
+정적 배포 환경에도 아래 두 환경변수는 반드시 설정해야 합니다.
+
+```env
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-publishable-key
+```
+
+`OPENAI_API_KEY`는 정적 배포 환경변수에 넣지 않습니다.
+
+## 문제 해결
+
+### `VITE_SUPABASE_URL이 설정되지 않았습니다.`
+
+`impl/keybuddy/frontend/.env.local`이 없거나 값이 비어 있는 상태입니다.
+
+```bash
+cd impl/keybuddy/frontend
+cp .env.local.example .env.local
+```
+
+그 다음 `.env.local`에 아래 값을 채웁니다.
+
+```env
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-publishable-key
+```
+
+Vite는 실행 중 환경변수 변경을 자동으로 다시 읽지 못할 수 있으므로, 수정 후
+`npm run dev`를 다시 실행합니다.
+
+### `UNAUTHORIZED_INVALID_JWT_FORMAT`
+
+Supabase publishable key를 `Authorization` 헤더에 넣거나, Edge Function의 JWT 검증
+설정이 배포 환경에 반영되지 않았을 때 볼 수 있는 오류입니다. 이 프로젝트의 프론트는
+publishable key를 `apikey` 헤더로 보냅니다. 함수 배포 시 아래 명령으로
+`supabase/config.toml`의 `verify_jwt = false` 설정까지 반영합니다.
+
+```bash
+cd impl/keybuddy
+supabase functions deploy recommend --project-ref your-project-ref --use-api
+```
+
+### OpenAI quota 또는 billing 오류
+
+프론트 설정 문제가 아니라 Supabase Edge Function에 등록된 `OPENAI_API_KEY`의 계정
+상태 문제입니다. OpenAI Platform에서 결제/한도 상태를 확인하거나, Supabase secret의
+키를 정상 키로 다시 등록해야 합니다.
+
+```bash
+cd impl/keybuddy
+supabase secrets set OPENAI_API_KEY=sk-...
+```
+
+### `npm run dev`에서 `Missing script: "dev"`가 뜨는 경우
+
+명령을 저장소 루트에서 실행한 것입니다. 프론트 폴더로 이동한 뒤 실행합니다.
+
+```bash
+cd impl/keybuddy/frontend
+npm run dev
+```
 
 ## 데이터 갱신
 
